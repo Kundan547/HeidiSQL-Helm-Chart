@@ -1,0 +1,120 @@
+# Default values for HeidiSQL
+replicaCount: 1
+
+image:
+  repository: tsari/heidisql
+  pullPolicy: IfNotPresent
+  tag: "latest"
+
+# VNC Configuration for web access
+vnc:
+  enabled: true
+  port: 5901
+  httpPort: 6901
+  password: "heidisql123"
+  readonly_password: "viewer123"
+  resolution: "1024x768"
+
+# NoVNC Web Interface
+novnc:
+  enabled: true
+  port: 6080
+
+# Azure SQL Database Configuration
+database:
+  server: "your-server.database.windows.net"
+  port: 1433
+  database: "your-database-name"
+  username: "your-username"
+  password: "your-password"
+  # Or use existing secret
+  existingSecret: ""
+  secretKeys:
+    username: "username"
+    password: "password"
+
+# Service Configuration
+service:
+  type: ClusterIP
+  vnc:
+    port: 5901
+  novnc:
+    port: 6080
+
+# Ingress for web access
+ingress:
+  enabled: false
+  className: "nginx"
+  annotations:
+    nginx.ingress.kubernetes.io/rewrite-target: /
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
+  hosts:
+    - host: heidisql.local
+      paths:
+        - path: /
+          pathType: Prefix
+  tls: []
+
+# Resource limits
+resources:
+  limits:
+    cpu: 1000m
+    memory: 2Gi
+  requests:
+    cpu: 500m
+    memory: 1Gi
+
+# Persistence for settings
+persistence:
+  enabled: true
+  storageClass: ""
+  accessMode: ReadWriteOnce
+  size: 1Gi
+
+# Security Context
+podSecurityContext:
+  runAsUser: 1000
+  runAsGroup: 1000
+  fsGroup: 1000
+
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: false
+  runAsNonRoot: true
+  runAsUser: 1000
+
+# Service Account
+serviceAccount:
+  create: false
+  annotations: {}
+  name: ""
+
+# Node selection
+nodeSelector: {}
+tolerations: []
+affinity: {}
+
+# Autoscaling (disabled by default for desktop app)
+autoscaling:
+  enabled: false
+  minReplicas: 1
+  maxReplicas: 1
+
+# Pod annotations
+podAnnotations: {}
+
+# Liveness and readiness probes
+livenessProbe:
+  enabled: true
+  initialDelaySeconds: 30
+  periodSeconds: 30
+  timeoutSeconds: 5
+  failureThreshold: 3
+
+readinessProbe:
+  enabled: true
+  initialDelaySeconds: 15
+  periodSeconds: 10
+  timeoutSeconds: 3
+  failureThreshold: 3

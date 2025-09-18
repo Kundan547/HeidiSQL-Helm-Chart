@@ -1,0 +1,180 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "heidisql.fullname" . }}
+  labels:
+    {{- include "heidisql.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "heidisql.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        {{- with .Values.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      labels:
+        {{- include "heidisql.selectorLabels" . | nindent 8 }}
+    spec:
+      {{- if .Values.serviceAccount.create }}
+      serviceAccountName: {{ include "heidisql.serviceAccountName" . }}
+      {{- end }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        # VNC Server container (must start first)
+        - name: vnc-server
+          image: consol/ubuntu-xfce-vnc:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: {{ .Values.vnc.port }}
+              name: vnc
+            - containerPort: {{ .Values.vnc.httpPort }}
+              name: vnc-http
+          env:
+            - name: VNC_PW
+              value: {{ .Values.vnc.password | quote }}
+            - name: VNC_VIEW_ONLY_PW
+              value: {{ .Values.vnc.readonly_password | quote }}
+            - name: VNC_RESOLUTION
+              value: {{ .Values.vnc.resolution | quote }}
+            - name: DISPLAY
+              value: ":1"
+          volumeMounts:
+            - name: vnc-socket
+              mountPath: /tmp/.X11-unix
+            - name: shm
+              mountPath: /dev/shm
+          resources:
+            limits:
+              cpu: 500m
+              memory: 1Gi
+            requests:
+              cpu: 200m
+              memory: 512Mi
+          {{- if .Values.livenessProbe.enabled }}
+          livenessProbe:
+            tcpSocket:
+              port: vnc
+            initialDelaySeconds: {{ .Values.livenessProbe.initialDelaySeconds }}
+            periodSeconds: {{ .Values.livenessProbe.periodSeconds }}
+            timeoutSeconds: {{ .Values.livenessProbe.timeoutSeconds }}
+            failureThreshold: {{ .Values.livenessProbe.failureThreshold }}
+          {{- end }}
+          {{- if .Values.readinessProbe.enabled }}
+          readinessProbe:
+            tcpSocket:
+              port: vnc
+            initialDelaySeconds: {{ .Values.readinessProbe.initialDelaySeconds }}
+            periodSeconds: {{ .Values.readinessProbe.periodSeconds }}
+            timeoutSeconds: {{ .Values.readinessProbe.timeoutSeconds }}
+            failureThreshold: {{ .Values.readinessProbe.failureThreshold }}
+          {{- end }}
+
+        # HeidiSQL container
+        - name: heidisql
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          env:
+            - name: DISPLAY
+              value: ":1"
+            - name: USER
+              value: "heidisql"
+            - name: UID
+              value: "1000"
+            - name: GID
+              value: "1000"
+            - name: WINEPREFIX
+              value: "/home/heidisql/.wine"
+          volumeMounts:
+            - name: vnc-socket
+              mountPath: /tmp/.X11-unix
+            - name: heidisql-config
+              mountPath: /home/heidisql/.wine/drive_c/users/heidisql/AppData/Roaming/HeidiSQL
+            - name: heidisql-scripts
+              mountPath: /home/heidisql/scripts
+            {{- if .Values.persistence.enabled }}
+            - name: heidisql-data
+              mountPath: /home/heidisql/data
+            {{- end }}
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          
+        # NoVNC Web Interface
+        {{- if .Values.novnc.enabled }}
+        - name: novnc
+          image: theasp/novnc:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: {{ .Values.novnc.port }}
+              name: novnc
+          env:
+            - name: DISPLAY_WIDTH
+              value: "1024"
+            - name: DISPLAY_HEIGHT
+              value: "768"
+            - name: VNC_SERVER
+              value: "localhost:{{ .Values.vnc.port }}"
+            - name: NOVNC_HEARTBEAT
+              value: "30"
+          resources:
+            limits:
+              cpu: 200m
+              memory: 256Mi
+            requests:
+              cpu: 100m
+              memory: 128Mi
+          {{- if .Values.readinessProbe.enabled }}
+          readinessProbe:
+            httpGet:
+              path: /
+              port: novnc
+            initialDelaySeconds: {{ .Values.readinessProbe.initialDelaySeconds }}
+            periodSeconds: {{ .Values.readinessProbe.periodSeconds }}
+          {{- end }}
+        {{- end }}
+      
+      volumes:
+        - name: vnc-socket
+          emptyDir: {}
+        - name: shm
+          emptyDir:
+            medium: Memory
+            sizeLimit: 1Gi
+        - name: heidisql-config
+          configMap:
+            name: {{ include "heidisql.fullname" . }}-config
+            items:
+              - key: portable_settings.txt
+                path: portable_settings.txt
+        - name: heidisql-scripts
+          configMap:
+            name: {{ include "heidisql.fullname" . }}-config
+            items:
+              - key: slow-queries.sql
+                path: slow-queries.sql
+              - key: performance-analysis.sql
+                path: performance-analysis.sql
+        {{- if .Values.persistence.enabled }}
+        - name: heidisql-data
+          persistentVolumeClaim:
+            claimName: {{ include "heidisql.fullname" . }}-data
+        {{- end }}
+      
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

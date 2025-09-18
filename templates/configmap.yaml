@@ -1,0 +1,152 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "heidisql.fullname" . }}-config
+  labels:
+    {{- include "heidisql.labels" . | nindent 4 }}
+data:
+  portable_settings.txt: |
+    [Servers\Azure SQL]
+    Host={{ .Values.database.server }}
+    User={{ .Values.database.username }}
+    Password={{ .Values.database.password }}
+    Port={{ .Values.database.port }}
+    NetType=10
+    Compressed=0
+    UseSSL=1
+    LocalTimeZone=0
+    QueryTimeout=30
+    KeepAlive=0
+    FullTableStatus=1
+    Databases={{ .Values.database.database }}
+    Comment=Azure SQL Database Connection
+    StartupScriptFilename=
+    TreeBackground=536870911
+    ConnectTimeout=20
+    ServerVersionFull=
+    AllDatabasesSize=
+    Username={{ .Values.database.username }}
+    LoginPrompt=0
+    WindowsAuth=0
+    CleartextPluginEnabled=0
+    
+  slow-queries.sql: |
+    -- Azure SQL Database Slow Query Analysis Scripts
+    -- ==============================================
+    
+    -- 1. Query Store - Top 10 slowest queries by average duration
+    SELECT TOP 10 
+        q.query_id,
+        SUBSTRING(qt.query_sql_text, 1, 100) as query_preview,
+        rs.avg_duration/1000.0 as avg_duration_ms,
+        rs.max_duration/1000.0 as max_duration_ms,
+        rs.count_executions,
+        rs.total_duration/1000.0 as total_duration_ms,
+        rs.avg_cpu_time/1000.0 as avg_cpu_time_ms,
+        rs.avg_logical_io_reads,
+        rs.last_execution_time
+    FROM sys.query_store_query q
+    JOIN sys.query_store_query_text qt ON q.query_text_id = qt.query_text_id
+    JOIN sys.query_store_runtime_stats rs ON q.query_id = rs.query_id
+    WHERE rs.avg_duration > 1000000 -- More than 1 second average
+    ORDER BY rs.avg_duration DESC;
+    
+    -- 2. Current running queries (potential slow ones)
+    SELECT 
+        r.session_id,
+        r.request_id,
+        r.start_time,
+        DATEDIFF(second, r.start_time, GETDATE()) as duration_seconds,
+        r.status,
+        r.command,
+        SUBSTRING(st.text, (r.statement_start_offset/2)+1, 
+            CASE WHEN r.statement_end_offset = -1 
+                THEN LEN(CONVERT(nvarchar(max), st.text)) * 2 
+                ELSE r.statement_end_offset 
+            END - r.statement_start_offset)/2) as statement_text,
+        r.cpu_time,
+        r.total_elapsed_time,
+        r.reads,
+        r.writes,
+        r.logical_reads,
+        DB_NAME(r.database_id) as database_name
+    FROM sys.dm_exec_requests r
+    CROSS APPLY sys.dm_exec_sql_text(r.sql_handle) st
+    WHERE r.session_id > 50
+        AND r.total_elapsed_time > 5000 -- More than 5 seconds
+    ORDER BY r.total_elapsed_time DESC;
+    
+    -- 3. Query Store - Most resource intensive queries
+    SELECT TOP 20
+        q.query_id,
+        SUBSTRING(qt.query_sql_text, 1, 200) as query_preview,
+        rs.avg_cpu_time/1000.0 as avg_cpu_time_ms,
+        rs.avg_logical_io_reads,
+        rs.avg_physical_io_reads,
+        rs.avg_duration/1000.0 as avg_duration_ms,
+        rs.count_executions,
+        (rs.avg_cpu_time * rs.count_executions)/1000.0 as total_cpu_time_ms
+    FROM sys.query_store_query q
+    JOIN sys.query_store_query_text qt ON q.query_text_id = qt.query_text_id  
+    JOIN sys.query_store_runtime_stats rs ON q.query_id = rs.query_id
+    ORDER BY rs.avg_cpu_time DESC;
+
+  performance-analysis.sql: |
+    -- Additional Performance Analysis Queries
+    -- =====================================
+    
+    -- 4. Index usage statistics
+    SELECT 
+        OBJECT_NAME(i.object_id) as table_name,
+        i.name as index_name,
+        s.user_seeks,
+        s.user_scans,
+        s.user_lookups,
+        s.user_updates,
+        s.last_user_seek,
+        s.last_user_scan,
+        s.last_user_lookup,
+        s.last_user_update
+    FROM sys.dm_db_index_usage_stats s
+    INNER JOIN sys.indexes i ON s.object_id = i.object_id AND s.index_id = i.index_id
+    WHERE s.database_id = DB_ID()
+    ORDER BY s.user_seeks + s.user_scans + s.user_lookups DESC;
+    
+    -- 5. Missing index suggestions
+    SELECT 
+        mid.statement as table_name,
+        mid.equality_columns,
+        mid.inequality_columns,
+        mid.included_columns,
+        migs.avg_total_user_cost * (migs.avg_user_impact / 100.0) * (migs.user_seeks + migs.user_scans) as improvement_measure,
+        'CREATE INDEX [IX_' + REPLACE(REPLACE(REPLACE(ISNULL(mid.equality_columns,''),', ','_'),'[',''),']','') + 
+        CASE WHEN mid.inequality_columns IS NOT NULL THEN '_' + REPLACE(REPLACE(REPLACE(mid.inequality_columns,', ','_'),'[',''),']','') ELSE '' END + 
+        '] ON ' + mid.statement + 
+        ' (' + ISNULL (mid.equality_columns,'') + 
+        CASE WHEN mid.equality_columns IS NOT NULL AND mid.inequality_columns IS NOT NULL THEN ',' ELSE '' END + 
+        ISNULL (mid.inequality_columns, '') + ')' + 
+        ISNULL (' INCLUDE (' + mid.included_columns + ')', '') as create_index_statement
+    FROM sys.dm_db_missing_index_groups mig
+    INNER JOIN sys.dm_db_missing_index_group_stats migs ON migs.group_handle = mig.index_group_handle
+    INNER JOIN sys.dm_db_missing_index_details mid ON mig.index_handle = mid.index_handle
+    WHERE migs.avg_total_user_cost * (migs.avg_user_impact / 100.0) * (migs.user_seeks + migs.user_scans) > 10
+    ORDER BY migs.avg_total_user_cost * migs.avg_user_impact * (migs.user_seeks + migs.user_scans) DESC;
+    
+    -- 6. Wait statistics
+    SELECT TOP 20
+        wait_type,
+        wait_time_ms / 1000.0 as wait_time_s,
+        (wait_time_ms - signal_wait_time_ms) / 1000.0 as resource_wait_time_s,
+        signal_wait_time_ms / 1000.0 as signal_wait_time_s,
+        waiting_tasks_count,
+        wait_time_ms * 100.0 / SUM(wait_time_ms) OVER() as percentage
+    FROM sys.dm_os_wait_stats
+    WHERE wait_type NOT IN (
+        'CLR_SEMAPHORE', 'LAZYWRITER_SLEEP', 'RESOURCE_QUEUE', 'SLEEP_TASK',
+        'SLEEP_SYSTEMTASK', 'SQLTRACE_BUFFER_FLUSH', 'WAITFOR', 'LOGMGR_QUEUE',
+        'CHECKPOINT_QUEUE', 'REQUEST_FOR_DEADLOCK_SEARCH', 'XE_TIMER_EVENT',
+        'BROKER_TO_FLUSH', 'BROKER_TASK_STOP', 'CLR_MANUAL_EVENT', 'CLR_AUTO_EVENT',
+        'DISPATCHER_QUEUE_SEMAPHORE', 'FT_IFTS_SCHEDULER_IDLE_WAIT',
+        'XE_DISPATCHER_WAIT', 'XE_DISPATCHER_JOIN', 'SQLTRACE_INCREMENTAL_FLUSH_SLEEP'
+    )
+    ORDER BY wait_time_ms DESC;

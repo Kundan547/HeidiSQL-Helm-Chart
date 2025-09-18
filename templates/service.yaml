@@ -1,0 +1,25 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "heidisql.fullname" . }}
+  labels:
+    {{- include "heidisql.labels" . | nindent 4 }}
+spec:
+  type: {{ .Values.service.type }}
+  ports:
+    - port: {{ .Values.vnc.port }}
+      targetPort: vnc
+      protocol: TCP
+      name: vnc
+    - port: {{ .Values.vnc.httpPort }}
+      targetPort: vnc-http
+      protocol: TCP
+      name: vnc-http
+    {{- if .Values.novnc.enabled }}
+    - port: {{ .Values.novnc.port }}
+      targetPort: novnc
+      protocol: TCP
+      name: novnc
+    {{- end }}
+  selector:
+    {{- include "heidisql.selectorLabels" . | nindent 4 }}

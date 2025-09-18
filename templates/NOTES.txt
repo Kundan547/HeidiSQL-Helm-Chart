@@ -1,0 +1,55 @@
+1. Get the HeidiSQL URL by running these commands:
+{{- if .Values.ingress.enabled }}
+{{- range $host := .Values.ingress.hosts }}
+  {{- range .paths }}
+  http{{ if $.Values.ingress.tls }}s{{ end }}://{{ $host.host }}{{ .path }}
+  {{- end }}
+{{- end }}
+{{- else if contains "NodePort" .Values.service.type }}
+  export NODE_PORT=$(kubectl get --namespace {{ .Release.Namespace }} -o jsonpath="{.spec.ports[2].nodePort}" services {{ include "heidisql.fullname" . }})
+  export NODE_IP=$(kubectl get nodes --namespace {{ .Release.Namespace }} -o jsonpath="{.items[0].status.addresses[0].address}")
+  echo http://$NODE_IP:$NODE_PORT
+{{- else if contains "LoadBalancer" .Values.service.type }}
+     NOTE: It may take a few minutes for the LoadBalancer IP to be available.
+           You can watch the status of by running 'kubectl get --namespace {{ .Release.Namespace }} svc -w {{ include "heidisql.fullname" . }}'
+  export SERVICE_IP=$(kubectl get svc --namespace {{ .Release.Namespace }} {{ include "heidisql.fullname" . }} --template "{{"{{ range (index .status.loadBalancer.ingress 0) }}{{.}}{{ end }}"}}")
+  echo http://$SERVICE_IP:{{ .Values.novnc.port }}
+{{- else if contains "ClusterIP" .Values.service.type }}
+  kubectl --namespace {{ .Release.Namespace }} port-forward svc/{{ include "heidisql.fullname" . }} {{ .Values.novnc.port }}:{{ .Values.novnc.port }}
+  
+  Then open your browser to: http://127.0.0.1:{{ .Values.novnc.port }}
+{{- end }}
+
+2. Access credentials:
+   - VNC Password: {{ .Values.vnc.password }}
+   - VNC View-Only Password: {{ .Values.vnc.readonly_password }}
+
+3. Azure SQL Database Connection:
+   - Server: {{ .Values.database.server }}
+   - Database: {{ .Values.database.database }}
+   - Username: {{ .Values.database.username }}
+   - Connection is pre-configured in HeidiSQL
+
+4. Pre-loaded SQL Scripts:
+   - /home/heidisql/scripts/slow-queries.sql - Slow query analysis
+   - /home/heidisql/scripts/performance-analysis.sql - Performance tuning queries
+
+5. Useful Commands:
+   # Check pod status
+   kubectl get pods -n {{ .Release.Namespace }} -l app.kubernetes.io/instance={{ .Release.Name }}
+   
+   # View logs
+   kubectl logs -n {{ .Release.Namespace }} -l app.kubernetes.io/instance={{ .Release.Name }} -c heidisql
+   
+   # Access pod directly
+   kubectl exec -it -n {{ .Release.Namespace }} {{ include "heidisql.fullname" . }}-<pod-hash> -c heidisql -- bash
+
+6. Troubleshooting:
+   - If HeidiSQL doesn't start, check the vnc-server container logs
+   - If web interface is blank, wait 30-60 seconds for VNC server to initialize
+   - For Azure SQL connection issues, verify firewall rules allow your K8s cluster IPs
+
+7. Security Notes:
+   - Change default VNC passwords in production
+   - Use Kubernetes secrets for database credentials
+   - Enable ingress TLS for external access

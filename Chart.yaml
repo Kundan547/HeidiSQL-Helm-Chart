@@ -1,0 +1,17 @@
+apiVersion: v2
+name: heidisql
+description: HeidiSQL database management tool for Azure SQL Database analysis
+type: application
+version: 0.1.0
+appVersion: "12.3"
+keywords:
+  - database
+  - sql
+  - azure
+  - management
+home: https://www.heidisql.com/
+sources:
+  - https://github.com/HeidiSQL/HeidiSQL
+maintainers:
+  - name: DevOps Team
+    email: devops@company.com
